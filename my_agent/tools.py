@@ -295,92 +295,41 @@ def _push_via_github_api(
         return f"Error accessing repository '{owner}/{repo}': {repo_res.status_code} {repo_res.text}"
 
     # Collect project files to upload
-    ignore_names = {".env", ".venv", ".git", ".gemini", "__pycache__", ".idea", ".vscode"}
+    ignore_names = {".env", ".venv", ".git", ".gemini", "__pycache__", ".idea", ".vscode", ".adk"}
     files_to_upload = []
     for root, dirs, files in os.walk(project_root):
         dirs[:] = [d for d in dirs if d not in ignore_names]
         for f in files:
-            if f in ignore_names or f.endswith(".pyc"):
+            if f in ignore_names or f.endswith(".pyc") or f.endswith(".db") or f.endswith(".sqlite") or f.endswith(".sqlite3"):
                 continue
             full_path = os.path.join(root, f)
             rel_path = os.path.relpath(full_path, project_root).replace("\\", "/")
             files_to_upload.append((rel_path, full_path))
 
-    # 3. Create blobs for each file
-    tree_items = []
+    # Synchronize all files using GitHub Contents API for maximum compatibility
+    uploaded_count = 0
     for rel_path, full_path in files_to_upload:
         with open(full_path, "rb") as fp:
             content_bytes = fp.read()
         b64_content = base64.b64encode(content_bytes).decode("utf-8")
-        blob_res = requests.post(
-            f"https://api.github.com/repos/{owner}/{repo}/git/blobs",
+
+        get_res = requests.get(f"https://api.github.com/repos/{owner}/{repo}/contents/{rel_path}", headers=headers)
+        payload = {
+            "message": f"{commit_message}: sync {rel_path}",
+            "content": b64_content,
+            "branch": branch,
+        }
+        if get_res.status_code == 200:
+            payload["sha"] = get_res.json()["sha"]
+
+        put_res = requests.put(
+            f"https://api.github.com/repos/{owner}/{repo}/contents/{rel_path}",
             headers=headers,
-            json={"content": b64_content, "encoding": "base64"},
+            json=payload,
         )
-        if blob_res.status_code != 201:
-            return f"Error uploading '{rel_path}': {blob_res.text}"
-        blob_sha = blob_res.json()["sha"]
-        tree_items.append({
-            "path": rel_path,
-            "mode": "100644",
-            "type": "blob",
-            "sha": blob_sha,
-        })
+        if put_res.status_code in (200, 201):
+            uploaded_count += 1
+        else:
+            return f"Error uploading '{rel_path}' to GitHub: {put_res.status_code} {put_res.text}"
 
-    # 4. Check existing branch ref
-    ref_res = requests.get(f"https://api.github.com/repos/{owner}/{repo}/git/ref/heads/{branch}", headers=headers)
-    parent_commits = []
-    base_tree = None
-    if ref_res.status_code == 200:
-        parent_commit_sha = ref_res.json()["object"]["sha"]
-        parent_commits = [parent_commit_sha]
-        commit_info = requests.get(f"https://api.github.com/repos/{owner}/{repo}/git/commits/{parent_commit_sha}", headers=headers)
-        if commit_info.status_code == 200:
-            base_tree = commit_info.json()["tree"]["sha"]
-
-    # 5. Create new Git tree
-    tree_payload = {"tree": tree_items}
-    if base_tree:
-        tree_payload["base_tree"] = base_tree
-    tree_res = requests.post(
-        f"https://api.github.com/repos/{owner}/{repo}/git/trees",
-        headers=headers,
-        json=tree_payload,
-    )
-    if tree_res.status_code != 201:
-        return f"Error creating Git tree on GitHub: {tree_res.text}"
-    new_tree_sha = tree_res.json()["sha"]
-
-    # 6. Create Git commit
-    commit_payload = {
-        "message": commit_message,
-        "tree": new_tree_sha,
-        "parents": parent_commits,
-    }
-    commit_res = requests.post(
-        f"https://api.github.com/repos/{owner}/{repo}/git/commits",
-        headers=headers,
-        json=commit_payload,
-    )
-    if commit_res.status_code != 201:
-        return f"Error creating Git commit on GitHub: {commit_res.text}"
-    new_commit_sha = commit_res.json()["sha"]
-
-    # 7. Update branch reference (or create branch if initial commit)
-    if parent_commits:
-        update_res = requests.patch(
-            f"https://api.github.com/repos/{owner}/{repo}/git/refs/heads/{branch}",
-            headers=headers,
-            json={"sha": new_commit_sha, "force": True},
-        )
-    else:
-        update_res = requests.post(
-            f"https://api.github.com/repos/{owner}/{repo}/git/refs",
-            headers=headers,
-            json={"ref": f"refs/heads/{branch}", "sha": new_commit_sha},
-        )
-
-    if update_res.status_code not in (200, 201):
-        return f"Error updating branch '{branch}' on GitHub: {update_res.text}"
-
-    return f"Success: Successfully pushed agent project to https://github.com/{owner}/{repo} (branch '{branch}')."
+    return f"Success: Successfully pushed {uploaded_count} files to https://github.com/{owner}/{repo} (branch '{branch}')."

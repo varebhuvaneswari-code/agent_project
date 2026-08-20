@@ -1,4 +1,4 @@
-﻿# Environment variables and secrets
+# Environment variables and secrets
 .env
 
 # Virtual environments
@@ -11,6 +11,13 @@ ENV/
 __pycache__/
 *.py[cod]
 *.class
+
+# ADK and SQLite DBs
+*.db
+*.sqlite
+*.sqlite3
+.adk/
+my_agent/.adk/
 
 # IDE and tooling
 .gemini/

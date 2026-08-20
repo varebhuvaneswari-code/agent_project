@@ -1,0 +1,20 @@
+﻿# Environment variables and secrets
+.env
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*.class
+
+# IDE and tooling
+.gemini/
+.idea/
+.vscode/
+*.swp
+*.swo
